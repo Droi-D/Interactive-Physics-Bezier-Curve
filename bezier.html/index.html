@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Bézier Simulation</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #0f172a; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        canvas { 
+            display: block; 
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 24px;
+            left: 24px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #e2e8f0;
+            max-width: 320px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            pointer-events: none;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 1.2rem;
+            color: #38bdf8;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        p {
+            margin: 0 0 8px 0;
+            font-size: 0.9rem;
+            line-height: 1.4;
+            color: #94a3b8;
+        }
+
+        .legend {
+            display: flex;
+            align-items: center;
+            font-size: 0.8rem;
+            margin-top: 4px;
+        }
+        .dot { width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <h1>Physics Bézier Curve</h1>
+    <p><strong>Move Mouse:</strong> Exert spring force on control points.</p>
+    <p><strong>Visuals:</strong> Computed via raw cubic math & derivatives.</p>
+    
+    <div style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+        <div class="legend"><div class="dot" style="background:#38bdf8"></div>Curve Path</div>
+        <div class="legend"><div class="dot" style="background:#f43f5e"></div>Tangent Vectors</div>
+        <div class="legend"><div class="dot" style="background:#fbbf24"></div>Control Springs</div>
+    </div>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+
+// Physics and Render settings
+const CONFIG = {
+    stiffness: 0.05, 
+    damping: 0.88,   
+    curveSteps: 100, 
+    showTangents: true
+};
+
+/* =========================================
+   VECTOR MATH
+   ========================================= */
+class Vec2 {
+    constructor(x, y) { this.x = x; this.y = y; }
+    add(v) { return new Vec2(this.x + v.x, this.y + v.y); }
+    sub(v) { return new Vec2(this.x - v.x, this.y - v.y); }
+    mult(s) { return new Vec2(this.x * s, this.y * s); }
+    mag() { return Math.sqrt(this.x * this.x + this.y * this.y); }
+    normalize() {
+        let m = this.mag();
+        return m === 0 ? new Vec2(0, 0) : new Vec2(this.x / m, this.y / m);
+    }
+}
+
+/* =========================================
+   PHYSICS ENGINE (Spring System)
+   ========================================= */
+class SpringPoint {
+    constructor(x, y) {
+        this.pos = new Vec2(x, y);
+        this.vel = new Vec2(0, 0);
+        this.target = new Vec2(x, y);
+    }
+
+    update() {
+        // Hooke's Law: F = -k * displacement
+        let force = this.target.sub(this.pos).mult(CONFIG.stiffness);
+        
+        // Damping to prevent infinite oscillation
+        let friction = this.vel.mult(1 - CONFIG.damping); 
+        
+        // Acceleration = Force - Friction
+        let accel = force.sub(friction);
+
+        this.vel = this.vel.add(accel);
+        this.pos = this.pos.add(this.vel);
+    }
+}
+
+/* =========================================
+   RENDER ENGINE
+   ========================================= */
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+// Control Points
+let p0, p3; // Fixed anchors
+let p1, p2; // Dynamic spring points
+let mouse = new Vec2(0, 0);
+
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+
+    p0 = new Vec2(width * 0.1, height * 0.5);
+    p3 = new Vec2(width * 0.9, height * 0.5);
+    
+    p1 = new SpringPoint(width * 0.4, height * 0.5);
+    p2 = new SpringPoint(width * 0.6, height * 0.5);
+}
+
+// Cubic Bézier: B(t) = (1-t)³P0 + 3(1-t)²tP1 + 3(1-t)t²P2 + t³P3
+function getBezierPoint(t, p0, p1, p2, p3) {
+    let mt = 1 - t;
+    let mt2 = mt * mt;
+    let mt3 = mt * mt * mt;
+    let t2 = t * t;
+    let t3 = t * t * t;
+
+    return p0.mult(mt3)
+        .add(p1.mult(3 * mt2 * t))
+        .add(p2.mult(3 * mt * t2))
+        .add(p3.mult(t3));
+}
+
+// Derivative: B'(t) for Tangent Vector
+function getTangent(t, p0, p1, p2, p3) {
+    let mt = 1 - t;
+    let mt2 = mt * mt;
+    let t2 = t * t;
+
+    let term1 = p1.sub(p0).mult(3 * mt2);
+    let term2 = p2.sub(p1).mult(6 * mt * t);
+    let term3 = p3.sub(p2).mult(3 * t2);
+
+    return term1.add(term2).add(term3).normalize();
+}
+
+function draw() {
+    ctx.clearRect(0, 0, width, height);
+    
+    // Update physics with offset targets for natural movement
+    p1.target = mouse.add(new Vec2(-50, 0)); 
+    p2.target = mouse.add(new Vec2(50, 0));
+    p1.update();
+    p2.update();
+
+    // Visualizing the spring force (tethers)
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.beginPath();
+    ctx.moveTo(mouse.x, mouse.y);
+    ctx.lineTo(p1.pos.x, p1.pos.y);
+    ctx.moveTo(mouse.x, mouse.y);
+    ctx.lineTo(p2.pos.x, p2.pos.y);
+    ctx.stroke();
+    ctx.setLineDash([]); 
+
+    // Draw Curve with gradient
+    let gradient = ctx.createLinearGradient(p0.x, p0.y, p3.x, p3.y);
+    gradient.addColorStop(0, '#38bdf8'); 
+    gradient.addColorStop(1, '#818cf8'); 
+
+    ctx.strokeStyle = gradient;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = '#38bdf8';
+
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i <= CONFIG.curveSteps; i++) {
+        let t = i / CONFIG.curveSteps;
+        let pos = getBezierPoint(t, p0, p1.pos, p2.pos, p3);
+        ctx.lineTo(pos.x, pos.y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Draw Tangent Vectors
+    if (CONFIG.showTangents) {
+        ctx.strokeStyle = '#f43f5e';
+        ctx.lineWidth = 2;
+        for (let i = 0; i <= 10; i++) {
+            let t = i / 10;
+            let origin = getBezierPoint(t, p0, p1.pos, p2.pos, p3);
+            let dir = getTangent(t, p0, p1.pos, p2.pos, p3);
+            let end = origin.add(dir.mult(30));
+
+            ctx.beginPath();
+            ctx.moveTo(origin.x, origin.y);
+            ctx.lineTo(end.x, end.y);
+            ctx.stroke();
+            
+            // Tangent anchor
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(origin.x, origin.y, 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // Control Points
+    ctx.fillStyle = '#fbbf24';
+    [p1, p2].forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.pos.x, p.pos.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // Fixed Anchors
+    ctx.fillStyle = '#fff';
+    [p0, p3].forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    requestAnimationFrame(draw);
+}
+
+window.addEventListener('mousemove', e => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+});
+window.addEventListener('resize', resize);
+
+// Start
+resize();
+draw();
+</script>
+</body>
+</html>

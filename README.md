@@ -30,3 +30,4 @@ Tangent vectors are calculated using the analytical derivative of the cubic Béz
 
 ## How to Run
 Simply open `index.html` in any modern web browser. No local server or build process is required.
+To preview the demo, open **`bezier_demo.mp4`** located in the repository.
